@@ -75,22 +75,7 @@ def main():
     datum = nu.strftime("%Y-%m-%d")
     tijd = nu.strftime("%H:%M:%S")
 
-    # Handmatige test mag altijd draaien.
-    # Geplande runs schrijven alleen rond middernacht Nederlandse tijd.
-    event_name = "manual"
-    github_event_path = Path("/github/workflow/event.json")
-    if github_event_path.exists():
-        try:
-            import json
-            with github_event_path.open("r", encoding="utf-8") as f:
-                event_data = json.load(f)
-            event_name = event_data.get("event_name", "manual")
-        except Exception:
-            event_name = "manual"
-
-    if event_name != "workflow_dispatch" and nu.hour != 0:
-        print(f"Niet uitgevoerd: lokale NL-tijd is {tijd}")
-        return
+    print(f"Testmodus: lokale NL-tijd is {tijd}, we gaan door.")
 
     maak_excel_als_nodig()
 
