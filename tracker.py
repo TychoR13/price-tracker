@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
@@ -9,43 +9,33 @@ import yfinance as yf
 
 EXCEL_BESTAND = Path("prijzen.xlsx")
 TIJDZONE = ZoneInfo("Europe/Amsterdam")
+START_DATUM = datetime(2025, 1, 1)
 
 
-def haal_crypto_prijzen_op():
-    url = "https://api.coingecko.com/api/v3/simple/price"
+def haal_crypto_prijs_op(coin, datum):
+    timestamp = int(datum.timestamp())
+
+    url = f"https://api.coingecko.com/api/v3/coins/{coin}/history"
     params = {
-        "ids": "bitcoin,ethereum",
-        "vs_currencies": "eur"
-    }
-    response = requests.get(url, params=params, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-
-    return {
-        "bitcoin_eur": data["bitcoin"]["eur"],
-        "ethereum_eur": data["ethereum"]["eur"],
+        "date": datum.strftime("%d-%m-%Y"),
+        "localization": "false"
     }
 
+    r = requests.get(url, params=params)
+    data = r.json()
 
-def haal_aandelen_op():
-    asml = yf.Ticker("ASML.AS")
-    nvda = yf.Ticker("NVDA")
+    return data["market_data"]["current_price"]["eur"]
 
-    asml_hist = asml.history(period="5d", interval="1d")
-    nvda_hist = nvda.history(period="5d", interval="1d")
 
-    if asml_hist.empty:
-        raise ValueError("Geen koersdata gevonden voor ASML.AS")
-    if nvda_hist.empty:
-        raise ValueError("Geen koersdata gevonden voor NVDA")
+def haal_aandeel_prijs(ticker, datum):
+    t = yf.Ticker(ticker)
+    hist = t.history(start=datum.strftime("%Y-%m-%d"),
+                     end=(datum + timedelta(days=1)).strftime("%Y-%m-%d"))
 
-    asml_prijs = float(asml_hist["Close"].dropna().iloc[-1])
-    nvda_prijs = float(nvda_hist["Close"].dropna().iloc[-1])
+    if hist.empty:
+        return None
 
-    return {
-        "asml_eur": round(asml_prijs, 2),
-        "nvda_usd": round(nvda_prijs, 2),
-    }
+    return float(hist["Close"].iloc[0])
 
 
 def maak_excel_als_nodig():
@@ -53,53 +43,65 @@ def maak_excel_als_nodig():
         wb = Workbook()
         ws = wb.active
         ws.title = "Prijzen"
+
         ws.append([
             "Datum",
-            "Tijd",
             "Bitcoin EUR",
             "Ethereum EUR",
             "ASML EUR",
-            "NVIDIA USD",
+            "NVIDIA USD"
         ])
+
         wb.save(EXCEL_BESTAND)
 
 
 def laatste_datum(ws):
     if ws.max_row <= 1:
         return None
-    return ws.cell(row=ws.max_row, column=1).value
+
+    return datetime.strptime(ws.cell(row=ws.max_row, column=1).value, "%Y-%m-%d")
 
 
 def main():
-    nu = datetime.now(TIJDZONE)
-    datum = nu.strftime("%Y-%m-%d")
-    tijd = nu.strftime("%H:%M:%S")
-
-    print(f"Testmodus: lokale NL-tijd is {tijd}, we gaan door.")
 
     maak_excel_als_nodig()
 
     wb = load_workbook(EXCEL_BESTAND)
     ws = wb["Prijzen"]
 
-    if laatste_datum(ws) == datum:
-        print(f"Bestand was al bijgewerkt voor {datum}")
-        return
+    last_date = laatste_datum(ws)
 
-    crypto = haal_crypto_prijzen_op()
-    aandelen = haal_aandelen_op()
+    if last_date is None:
+        current = START_DATUM
+    else:
+        current = last_date + timedelta(days=1)
 
-    ws.append([
-        datum,
-        tijd,
-        crypto["bitcoin_eur"],
-        crypto["ethereum_eur"],
-        aandelen["asml_eur"],
-        aandelen["nvda_usd"],
-    ])
+    vandaag = datetime.now(TIJDZONE)
+
+    while current.date() <= vandaag.date():
+
+        datum_str = current.strftime("%Y-%m-%d")
+        print("Fetching", datum_str)
+
+        btc = haal_crypto_prijs_op("bitcoin", current)
+        eth = haal_crypto_prijs_op("ethereum", current)
+
+        asml = haal_aandeel_prijs("ASML.AS", current)
+        nvda = haal_aandeel_prijs("NVDA", current)
+
+        ws.append([
+            datum_str,
+            btc,
+            eth,
+            asml,
+            nvda
+        ])
+
+        current += timedelta(days=1)
 
     wb.save(EXCEL_BESTAND)
-    print(f"Toegevoegd voor {datum} {tijd}")
+
+    print("Data update compleet")
 
 
 if __name__ == "__main__":
