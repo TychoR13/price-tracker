@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import os
@@ -10,6 +10,7 @@ import yfinance as yf
 
 EXCEL_BESTAND = Path("prijzen.xlsx")
 TIJDZONE = ZoneInfo("Europe/Amsterdam")
+START_DATUM = datetime(2026, 1, 1)
 
 
 # ---------- CONFIG ----------
@@ -17,14 +18,12 @@ TICKERS_EUR = {
     "ASML EUR": "ASML.AS",
     "Pharming EUR": "PHARM.AS",
     "TDIV EUR": "TDIV.AS",
-    "EUNL EUR": "IWDA.AS",   # FIX
-    "VUAA EUR": "VUAA.DE",   # FIX
+    "EUNL EUR": "IWDA.AS",
+    "VUAA EUR": "VUAA.DE",
     "Magnum EUR": "7RM.DU",
     "DFNS EUR": "DFNS.PA",
 }
 
-
-# USD → EUR
 TICKERS_USD_TO_EUR = {
     "AGNC EUR": "AGNC",
     "NVIDIA EUR": "NVDA",
@@ -53,9 +52,6 @@ def haal_eurusd_op():
     fx = yf.Ticker("EURUSD=X")
     hist = fx.history(period="5d")
 
-    if hist.empty:
-        raise ValueError("Geen EUR/USD data")
-
     return float(hist["Close"].dropna().iloc[-1])
 
 
@@ -65,7 +61,7 @@ def haal_metalen_op(eurusd):
     zilver = yf.Ticker("SI=F").history(period="5d")["Close"].dropna().iloc[-1]
     platina = yf.Ticker("PL=F").history(period="5d")["Close"].dropna().iloc[-1]
 
-    factor = 32.1507466  # ounce → kg
+    factor = 32.1507466
 
     return {
         "Goud EUR/kg": round((goud * factor) / eurusd, 2),
@@ -78,24 +74,20 @@ def haal_metalen_op(eurusd):
 def haal_aandelen_op(eurusd):
     resultaten = {}
 
-    # EUR assets
     for naam, ticker in TICKERS_EUR.items():
         hist = yf.Ticker(ticker).history(period="5d")
 
         if hist.empty:
-            print(f"Geen data voor {naam}")
             resultaten[naam] = None
             continue
 
         prijs = float(hist["Close"].dropna().iloc[-1])
         resultaten[naam] = round(prijs, 2)
 
-    # USD → EUR assets
     for naam, ticker in TICKERS_USD_TO_EUR.items():
         hist = yf.Ticker(ticker).history(period="5d")
 
         if hist.empty:
-            print(f"Geen data voor {naam}")
             resultaten[naam] = None
             continue
 
@@ -118,20 +110,15 @@ def maak_excel_als_nodig(kolommen):
 def laatste_datum(ws):
     if ws.max_row <= 1:
         return None
-    return ws.cell(row=ws.max_row, column=1).value
+
+    datum_str = ws.cell(row=ws.max_row, column=1).value
+    return datetime.strptime(datum_str, "%Y-%m-%d")
 
 
 # ---------- MAIN ----------
 def main():
     nu = datetime.now(TIJDZONE)
-    datum = nu.strftime("%Y-%m-%d")
-    tijd = nu.strftime("%H:%M:%S")
-
-    github_event_name = os.getenv("GITHUB_EVENT_NAME", "")
-
-    if github_event_name != "workflow_dispatch" and nu.hour != 0:
-        print("Niet middernacht → skip")
-        return
+    vandaag = nu.date()
 
     eurusd = haal_eurusd_op()
 
@@ -140,7 +127,6 @@ def main():
     metalen = haal_metalen_op(eurusd)
 
     alle_data = {**crypto, **aandelen, **metalen}
-
     kolommen = list(alle_data.keys())
 
     maak_excel_als_nodig(kolommen)
@@ -148,14 +134,25 @@ def main():
     wb = load_workbook(EXCEL_BESTAND)
     ws = wb["Prijzen"]
 
-    if laatste_datum(ws) == datum:
-        print("Vandaag al gedaan")
-        return
+    last_date = laatste_datum(ws)
 
-    ws.append([datum, tijd] + [alle_data[k] for k in kolommen])
+    if last_date is None:
+        current_date = START_DATUM
+    else:
+        current_date = last_date + timedelta(days=1)
+
+    while current_date.date() <= vandaag:
+        datum_str = current_date.strftime("%Y-%m-%d")
+
+        print(f"Toevoegen: {datum_str}")
+
+        ws.append([datum_str, "00:00:00"] + [alle_data[k] for k in kolommen])
+
+        current_date += timedelta(days=1)
 
     wb.save(EXCEL_BESTAND)
-    print("Toegevoegd!")
+
+    print("Klaar!")
 
 
 if __name__ == "__main__":
